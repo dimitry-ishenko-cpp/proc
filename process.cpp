@@ -162,12 +162,12 @@ process::process(std::function<int()>&& fn)
         open(fpi);
         open(fpe);
 
-        id_.handle_ = ::fork();
-        if(id_.handle_ == -1) throw posix::errno_error();
+        id_ = id(::fork());
+        if(native_handle() == -1) throw posix::errno_error();
 
         ////////////////////
         // child
-        if(id_.handle_ == 0)
+        if(native_handle() == 0)
         {
             write_to (fpo, STDOUT_FILENO);
             read_from(fpi, STDIN_FILENO );
@@ -255,7 +255,7 @@ state process::state()
     while(exists(state_))
     {
         int status;
-        auto pid = ::waitpid(id_.handle_, &status, WNOHANG);
+        auto pid = ::waitpid(native_handle(), &status, WNOHANG);
         if(pid == -1)
         {
             posix::errno_error error;
@@ -271,7 +271,7 @@ state process::state()
             else throw error;
         }
         else if(pid == 0) break; // no change
-        else if(pid == id_.handle_) update(status);
+        else if(pid == native_handle()) update(status);
     }
 
     return state_;
@@ -284,11 +284,13 @@ void process::detach() noexcept { id_ = id(); state_ = not_started; }
 void process::join()
 {
     if(!joinable()) throw std::system_error(posix::errc::invalid_argument);
+    if(get_id() == this_process::get_id())
+        throw std::system_error(posix::errc::resource_deadlock_would_occur);
 
     while(exists(state_))
     {
         int status;
-        auto pid = ::waitpid(id_.handle_, &status, 0);
+        auto pid = ::waitpid(native_handle(), &status, 0);
         if(pid == -1)
         {
             posix::errno_error error;
@@ -298,7 +300,7 @@ void process::join()
             }
             else throw error;
         }
-        else if(pid == id_.handle_) update(status);
+        else if(pid == native_handle()) update(status);
     }
 }
 
@@ -306,6 +308,8 @@ void process::join()
 bool process::try_join_for_(const nsec& time)
 {
     if(!joinable()) throw std::system_error(posix::errc::invalid_argument);
+    if(get_id() == this_process::get_id())
+        throw std::system_error(posix::errc::resource_deadlock_would_occur);
 
     bool joined = false;
     if(exists(state_))
@@ -340,7 +344,7 @@ void process::raise(int signal)
 {
     if(!joinable()) throw std::system_error(posix::errc::invalid_argument);
 
-    if(int code = ::kill(id_.handle_, signal))
+    if(int code = ::kill(native_handle(), signal))
     {
         posix::errno_error error;
         if(error.code() != std::errc::no_such_process) throw error;
