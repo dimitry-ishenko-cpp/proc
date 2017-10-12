@@ -241,18 +241,9 @@ void process::swap(process& rhs) noexcept
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-namespace
-{
-
-bool exists(pgm::state state) noexcept
-{ return state == running || state == stopped; }
-
-}
-
-////////////////////////////////////////////////////////////////////////////////
 state process::state()
 {
-    while(exists(state_))
+    while(state_ == running || state_ == stopped)
     {
         int status;
         auto pid = ::waitpid(native_handle(), &status, WNOHANG);
@@ -287,7 +278,7 @@ void process::join()
     if(get_id() == this_process::get_id())
         throw std::system_error(posix::errc::resource_deadlock_would_occur);
 
-    while(exists(state_))
+    while(state_ == running || state_ == stopped)
     {
         int status;
         auto pid = ::waitpid(native_handle(), &status, 0);
@@ -311,32 +302,34 @@ bool process::try_join_for_(const nsec& time)
     if(get_id() == this_process::get_id())
         throw std::system_error(posix::errc::resource_deadlock_would_occur);
 
-    bool joined = false;
-    if(exists(state_))
+    state(); // update state
+    if(state_ != running && state_ != stopped) return true;
+
+    ////////////////////
+    struct guard
     {
-        auto before = std::signal(SIGCHLD, [](int){ });
-
-        auto sec = std::chrono::duration_cast<std::chrono::seconds>(time);
-        timespec tv { sec.count(), (time - sec).count() };
-
-        while(::nanosleep(&tv, &tv) == -1)
-        {
-            posix::errno_error error;
-            if(error.code() == std::errc::interrupted)
-            {
-                state(); // update state_
-                if(!exists(state_)) { joined = true; break; }
-            }
-            else
-            {
-                std::signal(SIGCHLD, before);
-                throw error;
-            }
-        }
-
-        std::signal(SIGCHLD, before);
+        guard() { before = std::signal(SIGCHLD, [](int){ }); }
+       ~guard() { std::signal(SIGCHLD, before); }
+    private:
+        void(*before)(int);
     }
-    return joined;
+    signal;
+
+    ////////////////////
+    auto sec = std::chrono::duration_cast<std::chrono::seconds>(time);
+    timespec tv { sec.count(), (time - sec).count() };
+
+    while(::nanosleep(&tv, &tv) == -1)
+    {
+        posix::errno_error error;
+        if(error.code() == std::errc::interrupted)
+        {
+            state(); // update state_
+            if(state_ != running && state_ != stopped) return true;
+        }
+        else throw error;
+    }
+    return false;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
