@@ -15,6 +15,7 @@
 #include <system_error>
 
 #include <sys/wait.h>
+#include <unistd.h>
 
 ////////////////////////////////////////////////////////////////////////////////
 namespace pgm
@@ -161,12 +162,12 @@ process::process(std::function<int()>&& fn)
         open(fpi);
         open(fpe);
 
-        id_ = ::fork();
-        if(id_ == -1) throw posix::errno_error();
+        id_.handle_ = ::fork();
+        if(id_.handle_ == -1) throw posix::errno_error();
 
         ////////////////////
         // child
-        if(id_ == 0)
+        if(id_.handle_ == 0)
         {
             write_to (fpo, STDOUT_FILENO);
             read_from(fpi, STDIN_FILENO );
@@ -254,7 +255,7 @@ state process::state()
     while(exists(state_))
     {
         int status;
-        auto pid = ::waitpid(id_, &status, WNOHANG);
+        auto pid = ::waitpid(id_.handle_, &status, WNOHANG);
         if(pid == -1)
         {
             posix::errno_error error;
@@ -270,14 +271,14 @@ state process::state()
             else throw error;
         }
         else if(pid == 0) break; // no change
-        else if(pid == id_) update(status);
+        else if(pid == id_.handle_) update(status);
     }
 
     return state_;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-void process::detach() noexcept { id_ = 0; state_ = not_started; }
+void process::detach() noexcept { id_ = id(); state_ = not_started; }
 
 ////////////////////////////////////////////////////////////////////////////////
 void process::join()
@@ -287,7 +288,7 @@ void process::join()
     while(exists(state_))
     {
         int status;
-        auto pid = ::waitpid(id_, &status, 0);
+        auto pid = ::waitpid(id_.handle_, &status, 0);
         if(pid == -1)
         {
             posix::errno_error error;
@@ -297,7 +298,7 @@ void process::join()
             }
             else throw error;
         }
-        else if(pid == id_) update(status);
+        else if(pid == id_.handle_) update(status);
     }
 }
 
@@ -339,7 +340,7 @@ void process::raise(int signal)
 {
     if(!joinable()) throw std::system_error(posix::errc::invalid_argument);
 
-    if(int code = ::kill(id_, signal))
+    if(int code = ::kill(id_.handle_, signal))
     {
         posix::errno_error error;
         if(error.code() != std::errc::no_such_process) throw error;
@@ -353,13 +354,13 @@ void process::update(int status)
     {
         state_ = exited;
         code_ = WEXITSTATUS(status);
-        id_ = 0;
+        id_ = id();
     }
     else if(WIFSIGNALED(status))
     {
         state_ = signaled;
         signal_ = WTERMSIG(status);
-        id_ = 0;
+        id_ = id();
     }
     else if(WIFSTOPPED(status))
     {

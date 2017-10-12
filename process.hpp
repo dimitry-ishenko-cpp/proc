@@ -14,9 +14,8 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <ostream>
 #include <utility>
-
-#include <unistd.h> // pid_t
 
 ////////////////////////////////////////////////////////////////////////////////
 namespace pgm
@@ -36,8 +35,9 @@ enum state
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-// Execute function in a child process.
+// Creates and manages child process.
 //
+// Modeled after std::thread.
 // Provides C++-style streams (cin, cout, cerr) attached
 // to the process' stdin, stdout and stderr streams.
 //
@@ -45,7 +45,30 @@ class process
 {
 public:
     ////////////////////
-    using id = pid_t;
+    using native_handle_type = pid_t;
+
+    // process id
+    struct id
+    {
+        ////////////////////
+        id() noexcept = default;
+        explicit id(native_handle_type h) noexcept : handle_(h) { }
+
+    private:
+        ////////////////////
+        native_handle_type handle_ { };
+        friend class process;
+
+        friend bool operator==(id x, id y) noexcept { return x.handle_==y.handle_; }
+        friend bool operator< (id x, id y) noexcept { return x.handle_< y.handle_; }
+
+        template<typename CharT, typename Traits>
+        friend std::basic_ostream<CharT, Traits>&
+        operator<<(std::basic_ostream<CharT, Traits>& os, process::id id)
+        { return os << id.handle_; }
+
+        friend struct std::hash<process::id>;
+    };
 
     ////////////////////
     process();
@@ -63,11 +86,13 @@ public:
     void swap(process&) noexcept;
 
     ////////////////////
-    bool joinable() const noexcept { return id_; }
+    bool joinable() const noexcept { return !(id_ == id()); }
     explicit operator bool() const noexcept { return joinable(); }
 
     // get process id
     id get_id() const noexcept { return id_; }
+    // get pid
+    auto native_handle() const noexcept { return id_.handle_; }
 
     // get process state, exit code & signal
     pgm::state state();
@@ -101,7 +126,7 @@ private:
     process(std::function<int()>&&);
 
     ////////////////////
-    id id_ = 0;
+    id id_;
 
     enum state state_ = not_started;
     int code_ = -1;
@@ -116,6 +141,12 @@ private:
     std::unique_ptr<ofilebuf> fbi_;
     std::unique_ptr<ifilebuf> fbo_, fbe_;
 };
+
+////////////////////////////////////////////////////////////////////////////////
+inline bool operator!=(process::id x, process::id y) noexcept { return !(x==y); }
+inline bool operator> (process::id x, process::id y) noexcept { return  (y< x); }
+inline bool operator<=(process::id x, process::id y) noexcept { return !(y< x); }
+inline bool operator>=(process::id x, process::id y) noexcept { return !(x< y); }
 
 ////////////////////////////////////////////////////////////////////////////////
 template<typename Fn, typename... Args>
@@ -146,4 +177,17 @@ inline void swap(process& lhs, process& rhs) noexcept { lhs.swap(rhs); }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-#endif // PROC_PROCESS_HPP
+namespace std
+{
+
+template<>
+struct hash<pgm::process::id>
+{
+    auto operator()(pgm::process::id id) const noexcept
+    { return hash<decltype(id.handle_)>{}(id.handle_); }
+};
+
+}
+
+////////////////////////////////////////////////////////////////////////////////
+#endif
