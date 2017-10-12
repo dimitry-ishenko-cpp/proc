@@ -8,14 +8,13 @@
 #include "posix/error.hpp"
 #include "proc/process.hpp"
 
+#include <csignal>
 #include <cstdio>
 #include <ctime>
 #include <streambuf>
 #include <system_error>
 
-#include <signal.h>   // kill
-#include <sys/wait.h> // waitpid
-#include <time.h>     // nanosleep
+#include <sys/wait.h>
 
 ////////////////////////////////////////////////////////////////////////////////
 namespace pgm
@@ -244,15 +243,15 @@ void process::swap(process& rhs) noexcept
 namespace
 {
 
-bool termed(pgm::state state) noexcept
-{ return state != running && state != stopped; }
+bool exists(pgm::state state) noexcept
+{ return state == running || state == stopped; }
 
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 state process::state()
 {
-    while(!termed(state_))
+    while(exists(state_))
     {
         int status;
         auto pid = ::waitpid(id_, &status, WNOHANG);
@@ -285,7 +284,7 @@ void process::join()
 {
     if(!joinable()) throw std::system_error(posix::errc::invalid_argument);
 
-    while(!termed(state_))
+    while(exists(state_))
     {
         int status;
         auto pid = ::waitpid(id_, &status, 0);
@@ -308,7 +307,7 @@ bool process::try_join_for_(const nsec& time)
     if(!joinable()) throw std::system_error(posix::errc::invalid_argument);
 
     bool joined = false;
-    if(!termed(state_))
+    if(exists(state_))
     {
         auto before = std::signal(SIGCHLD, [](int){ });
 
@@ -320,7 +319,8 @@ bool process::try_join_for_(const nsec& time)
             posix::errno_error error;
             if(error.code() == std::errc::interrupted)
             {
-                if(termed(state())) { joined = true; break; }
+                state(); // update state_
+                if(!exists(state_)) { joined = true; break; }
             }
             else
             {
